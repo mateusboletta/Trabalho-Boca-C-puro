@@ -1,0 +1,120 @@
+### Funcionamento Lógico do Programa com Citações de Código
+
+Vamos detalhar o funcionamento lógico do seu programa com citações específicas de cada parte do código.
+
+1. **Criação do Pipe**:
+   O programa começa criando um pipe para permitir a comunicação entre o processo principal e o subprocesso.
+   ```c
+   int pipe_fd[2]; // Pipe para comunicação
+   if (pipe(pipe_fd) == -1) {
+       perror("pipe");
+       exit(EXIT_FAILURE);
+   }
+   ```
+
+2. **Fork do Subprocesso**:
+   Utiliza-se `fork()` para criar um subprocesso. O processo pai (principal) e o subprocesso têm funções distintas:
+   ```c
+   pid_t pid = fork();
+   if (pid == -1) {
+       perror("fork");
+       exit(EXIT_FAILURE);
+   }
+   ```
+
+   - **Processo Principal**:
+     O processo principal fecha a extremidade de leitura do pipe, lê comandos do usuário e os envia ao subprocesso.
+     ```c
+     if (pid == 0) { // Subprocesso
+         close(pipe_fd[1]); // Fecha a extremidade de escrita no subprocesso
+         banking_subprocess(pipe_fd[0], pipe_fd[1]);
+         exit(EXIT_SUCCESS);
+     } else { // Processo principal
+         close(pipe_fd[0]); // Fecha a extremidade de leitura no processo principal
+
+         char command[256];
+         while (1) {
+             printf("\nEnter command (deposit, withdraw, balance, exit): ");
+             fgets(command, sizeof(command), stdin);
+             command[strcspn(command, "\n")] = '\0';
+
+             if (strcmp(command, "exit") == 0) {
+                 write(pipe_fd[1], "exit", 5);
+                 break;
+             }
+             write(pipe_fd[1], command, strlen(command) + 1);
+         }
+
+         close(pipe_fd[1]); // Fecha a extremidade de escrita
+         wait(NULL); // Aguarda pelo subprocesso
+     }
+     ```
+
+3. **Função do Subprocesso**:
+   O subprocesso lê comandos do pipe e cria threads para processá-los.
+   ```c
+   void banking_subprocess(int read_fd, int write_fd) {
+       char buffer[256];
+
+       while (1) {
+           ssize_t bytes_read = read(read_fd, buffer, sizeof(buffer));
+           if (bytes_read <= 0) {
+               break; // Pipe fechado ou erro
+           }
+
+           buffer[bytes_read] = '\0';
+           if (strcmp(buffer, "exit") == 0) {
+               printf("Exiting banking subprocess...\n");
+               break;
+           }
+
+           pthread_t thread;
+           char *request = strdup(buffer); // Duplicar a string de requisição para a thread
+           if (pthread_create(&thread, NULL, handle_request, request) != 0) {
+               perror("pthread_create");
+               free(request);
+           }
+           pthread_detach(thread); // Recolher automaticamente os recursos da thread
+       }
+   }
+   ```
+
+4. **Execução das Threads**:
+   Cada thread executa a função `handle_request()` para processar o comando recebido:
+   ```c
+   void *handle_request(void *arg) {
+       char *request = (char *)arg;
+       pthread_mutex_lock(&balance_mutex);
+
+       if (strncmp(request, "deposit ", 8) == 0) {
+           double amount = atof(request + 8);
+           account_balance += amount;
+           printf("Deposited %.2f, New Balance: %.2f\n", amount, account_balance);
+       } else if (strncmp(request, "withdraw ", 9) == 0) {
+           double amount = atof(request + 9);
+           if (amount > account_balance) {
+               printf("Insufficient funds! Current Balance: %.2f\n", account_balance);
+           } else {
+               account_balance -= amount;
+               printf("Withdrew %.2f, New Balance: %.2f\n", amount, account_balance);
+           }
+       } else if (strcmp(request, "balance") == 0) {
+           printf("Current Balance: %.2f\n", account_balance);
+       } else {
+           printf("Unknown command: %s\n", request);
+       }
+
+       pthread_mutex_unlock(&balance_mutex);
+       free(request); // Liberar a memória alocada dinamicamente
+       return NULL;
+   }
+   ```
+
+### Resumo dos Processos
+
+- **Pipe**: Usado para comunicação entre o processo principal e o subprocesso.
+- **Fork**: Cria um subprocesso que executa operações bancárias.
+- **Thread**: Cada comando é processado por uma nova thread para permitir a concorrência.
+- **Mutex**: Garante acesso seguro ao saldo da conta, prevenindo condições de corrida.
+
+Essa abordagem combina de forma eficiente o uso de pipes, processos, threads e mutexes para criar um sistema bancário concorrente simples, permitindo a execução segura de múltiplas operações bancárias simultaneamente. Se precisar de mais algum detalhe, estou aqui para ajudar!
